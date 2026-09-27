@@ -1,92 +1,39 @@
 # Architecture
 
 The system is a real pipeline, not a collection of isolated modules:
-
-**raw longitudinal data → canonical schema → quality gates → labels/features → patient-level split → forecast/event models → three-layer digital twin → probabilistic trajectories → hypoglycemia probability + counterfactual simulation → evaluation artifacts → dashboard**
-
-## End-to-end flow
-
-~~~mermaid
-flowchart TB
-    subgraph S["Data sources"]
-      OH["OhioT1DM<br/>primary development + LOSO"]
-      DT["DiaTrend<br/>external validation"]
-      HU["HUPA-UCM<br/>external multimodal validation"]
-      SY["Synthea FHIR<br/>synthetic infrastructure/scenarios"]
-    end
-    OH --> SCH["Canonical schema<br/>schema.py"]
-    DT --> SCH
-    HU --> SCH
-    SY --> SCH
-    SCH --> PRE["5-min timeline + quality gates<br/>preprocessing.py"]
-    PRE --> LAB["Future hypoglycemia labels<br/>labels.py"]
-    PRE --> WIN["Causal feature windows<br/>glucose · slope · acceleration · IOB · context"]
-    LAB --> SPL["Patient-level split integrity<br/>LOSO / GroupKFold<br/>splits.py"]
-    SPL --> BASE["Baselines<br/>persistence · trend · static model"]
-    SPL --> TRAIN["Forecast model training<br/>GRU / TCN<br/>training.py"]
-    WIN --> TRAIN
-    WIN --> STATE["Layer B — Dynamic state estimator<br/>GRU hidden state"]
-    subgraph T["Personalized digital twin"]
-      PRIOR["Layer A — Patient prior<br/>constrained physiological proxies"]
-      STATE --> SIM["Layer C — Probabilistic forward simulator<br/>future glucose distribution"]
-      PRIOR --> SIM
-      STATE --> SIM
-      SIM --> PATHS["Monte Carlo trajectories"]
-      PATHS --> RISK["30 / 60 / 120 min<br/>P(glucose < 70)"]
-      SIM --> CF["Counterfactual simulator<br/>carbs · exercise · insulin<br/>simulation only"]
-    end
-    SCH --> PRIOR
-    TRAIN --> STATE
-    PRE --> STATE
-    SPL --> EVAL["Patient-level evaluation"]
-    DT --> EVAL
-    HU --> EVAL
-    TRAIN --> EVAL
-    RISK --> EVAL
-    EVAL --> ART["Research artifacts<br/>metrics.json · plots · validation report"]
-    ART --> CARD["Model card + data card"]
-    RISK --> DASH["Research dashboard<br/>state · uncertainty · risk"]
-    CF --> DASH
-    subgraph C["Trust / CI gates"]
-      TEST["pytest<br/>unit + integration"]
-      LEAK["Patient split integrity<br/>train/test disjointness"]
-      LINT["ruff"]
-      RGATE["Dataset-backed research gate<br/>metrics / calibration / safety thresholds"]
-      CI["GitHub Actions"]
-    end
-    PRE -.->|"shared constants"| CFG["config.py"]
-    TRAIN -.->|"seed / optimizer / model config"| CFG
-    SIM -.->|"seed / trajectory count"| CFG
-    TEST --> CI
-    LEAK --> CI
-    LINT --> CI
-    ART --> RGATE
-    RGATE --> CI
-~~~
+**raw longitudinal data → canonical schema → quality gates → labels/features → patient-level split → forecast/state model → three-layer digital twin → probabilistic trajectories → hypoglycemia probability + counterfactual simulation → evaluation artifacts → dashboard**
 
 ## Code mapping
 
 | Flow stage | Implementation |
 |---|---|
+| Source adapters | src/digital_twin/ingestion/ |
 | Canonical schema | src/digital_twin/schema.py |
-| Resampling / gaps / causal features | src/digital_twin/preprocessing.py |
-| Hypoglycemia labels | src/digital_twin/labels.py |
-| Patient-level validation splits | src/digital_twin/splits.py |
-| Baselines | src/digital_twin/baselines.py |
-| GRU / TCN | src/digital_twin/models.py |
-| Training | src/digital_twin/training.py |
-| Twin/simulation | src/digital_twin/twin.py, simulator.py |
+| Resampling / causal features | src/digital_twin/preprocessing.py |
+| Future hypo labels | src/digital_twin/labels.py |
+| Patient-level validation split | src/digital_twin/splits.py |
+| Forecast model | src/digital_twin/models.py |
+| Layer A | src/digital_twin/twin_layers/layer_a.py |
+| Layer B | src/digital_twin/twin_layers/layer_b.py |
+| Layer C | src/digital_twin/twin_layers/layer_c.py |
+| Runtime twin | src/digital_twin/twin.py |
+| End-to-end pipeline | src/digital_twin/pipeline.py |
+| Artifacts | src/digital_twin/artifacts.py |
 | Evaluation | src/digital_twin/evaluation.py |
 | CI | .github/workflows/ci.yml |
 
 ## Architectural boundary
 
-Layer A currently implements a constrained patient prior initializer. It is not presented as an XGBoost-trained physiological estimator until defensible patient-level targets or proxy targets are available.
+Layer A initializes constrained patient-specific physiological proxies from static context. These are model parameters, not measured clinical truth.
 
-Layer B contains the dynamic patient state learned from longitudinal observations.
+Layer B converts the longitudinal feature window into a dynamic latent patient state and a probabilistic future-glucose distribution.
 
-Layer C turns that state plus the patient prior into probabilistic glucose trajectories and counterfactual scenarios. Counterfactuals are simulations only and do not emit treatment recommendations.
+Layer C consumes the Layer B distribution and Layer A uncertainty prior to generate Monte Carlo trajectories. The same forward engine powers observed forecasting and explicitly hypothetical counterfactual scenarios.
+
+The runtime object in twin.py binds all three layers together. pipeline.py binds the runtime to ingestion, preprocessing, splitting, training and evaluation.
+
+No treatment recommendation is emitted by the architecture.
 
 ## Research artifacts
 
-Every dataset-backed experiment should terminate in explicit metrics, calibration diagnostics, plots, validation documentation, and updated model/data cards. Clinical datasets are not bundled with the repository.
+Every dataset-backed experiment should terminate in explicit metrics, calibration diagnostics, predictions, run metadata, validation documentation, and updated model/data cards. Clinical datasets are not bundled with the repository.
