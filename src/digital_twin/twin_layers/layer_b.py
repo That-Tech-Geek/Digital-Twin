@@ -4,6 +4,8 @@ from ..models import GRUForecaster
 from ..contracts import TwinState
 
 class DynamicStateEstimator:
+    """Layer B: converts a longitudinal window into a latent patient state and forecast distribution."""
+
     def __init__(self, model: GRUForecaster):
         self.model=model
 
@@ -13,11 +15,13 @@ class DynamicStateEstimator:
         x=torch.as_tensor(X,dtype=torch.float32)
         _,hidden=self.model.encoder(x)
         state=hidden[0,-1].detach().cpu().numpy()
-        return TwinState(patient_id, state, float(X[-1,0]), float(X[-1,1]) if X.shape[1]>1 else 0.0)
+        current_glucose=float(X[0,-1,0])
+        current_slope=float(X[0,-1,1]) if X.shape[-1]>1 else 0.0
+        return TwinState(patient_id,state,current_glucose,current_slope)
 
     @torch.no_grad()
     def forecast_distribution(self, X: np.ndarray, horizon_steps: int):
         self.model.eval()
         x=torch.as_tensor(X,dtype=torch.float32)
-        mean,sigma=self.model(x,horizon_steps)[:,:,0],self.model(x,horizon_steps)[:,:,1]
-        return mean.cpu().numpy(),sigma.cpu().numpy()
+        output=self.model(x,horizon_steps)
+        return output[:,:,0].cpu().numpy(),output[:,:,1].cpu().numpy()
