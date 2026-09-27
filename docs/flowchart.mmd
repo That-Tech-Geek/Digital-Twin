@@ -1,0 +1,42 @@
+flowchart TB
+    subgraph S["Data sources"]
+      OH["OhioT1DM<br/>primary development + LOSO"]
+      DT["DiaTrend<br/>external validation"]
+      HU["HUPA-UCM<br/>external multimodal validation"]
+      SY["Synthea FHIR<br/>synthetic infrastructure/scenarios"]
+    end
+    OH --> SCH["Canonical schema<br/>schema.py"]
+    DT --> SCH
+    HU --> SCH
+    SY --> SCH
+    SCH --> PRE["5-min timeline + quality gates<br/>preprocessing.py"]
+    PRE --> LAB["Future hypoglycemia labels<br/>labels.py"]
+    PRE --> WIN["Causal feature windows<br/>slope · acceleration · IOB · context"]
+    LAB --> SPL["Patient-level split integrity<br/>LOSO / GroupKFold<br/>splits.py"]
+    SPL --> BASE["Baselines"]
+    SPL --> TRAIN["GRU / TCN training"]
+    WIN --> TRAIN
+    WIN --> STATE["Layer B — Dynamic state estimator"]
+    SCH --> PRIOR["Layer A — Patient prior"]
+    TRAIN --> STATE
+    PRE --> STATE
+    PRIOR --> SIM["Layer C — Probabilistic forward simulator"]
+    STATE --> SIM
+    SIM --> PATHS["Monte Carlo trajectories"]
+    PATHS --> RISK["30 / 60 / 120 min risk"]
+    SIM --> CF["Counterfactual simulator<br/>simulation only"]
+    SPL --> EVAL["Patient-level evaluation"]
+    TRAIN --> EVAL
+    RISK --> EVAL
+    EVAL --> ART["metrics.json + plots + report"]
+    ART --> CARD["model/data cards"]
+    RISK --> DASH["Research dashboard"]
+    CF --> DASH
+    TEST["pytest"] --> CI["GitHub Actions"]
+    LEAK["split integrity"] --> CI
+    LINT["ruff"] --> CI
+    ART --> RG["research performance gate"]
+    RG --> CI
+    PRE -.-> CFG["config.py"]
+    TRAIN -.-> CFG
+    SIM -.-> CFG
