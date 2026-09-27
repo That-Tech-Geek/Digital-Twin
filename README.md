@@ -25,33 +25,30 @@ flowchart TB
     SPL --> BASE["Baselines<br/>persistence · trend · static model"]
     SPL --> TRAIN["Forecast model training<br/>GRU / TCN<br/>training.py"]
     WIN --> TRAIN
-    WIN --> STATE["Layer B — Dynamic state estimator<br/>GRU hidden state"]
+    TRAIN --> STATE["Layer B — Dynamic state estimator<br/>twin_layers/layer_b.py"]
+    SCH --> PRIOR["Layer A — Patient prior<br/>twin_layers/layer_a.py"]
     subgraph T["Personalized digital twin"]
-      PRIOR["Layer A — Patient prior<br/>constrained physiological proxies"]
-      STATE --> SIM["Layer C — Probabilistic forward simulator<br/>future glucose distribution"]
+      STATE --> SIM["Layer C — Probabilistic forward simulator<br/>twin_layers/layer_c.py"]
       PRIOR --> SIM
-      STATE --> SIM
       SIM --> PATHS["Monte Carlo trajectories"]
       PATHS --> RISK["30 / 60 / 120 min<br/>P(glucose < 70)"]
       SIM --> CF["Counterfactual simulator<br/>carbs · exercise · insulin<br/>simulation only"]
     end
-    SCH --> PRIOR
-    TRAIN --> STATE
     PRE --> STATE
-    DT --> EVAL["Patient-level evaluation"]
+    SPL --> EVAL["Patient-level evaluation"]
+    DT --> EVAL
     HU --> EVAL
-    SPL --> EVAL
     TRAIN --> EVAL
     RISK --> EVAL
-    EVAL --> ART["Research artifacts<br/>metrics.json · plots · validation report"]
+    EVAL --> ART["Research artifacts<br/>metrics.json · predictions.csv · manifest"]
     ART --> CARD["Model card + data card"]
     RISK --> DASH["Research dashboard<br/>state · uncertainty · risk"]
     CF --> DASH
     subgraph C["Trust / CI gates"]
-      TEST["pytest<br/>unit + integration"]
-      LEAK["Patient split integrity<br/>train/test disjointness"]
+      TEST["pytest<br/>unit + architecture tests"]
+      LEAK["Patient split integrity"]
       LINT["ruff"]
-      RGATE["Dataset-backed research gate<br/>metrics / calibration / safety thresholds"]
+      E2E["dataset-free end-to-end demo"]
       CI["GitHub Actions"]
     end
     PRE -.->|"shared constants"| CFG["config.py"]
@@ -60,13 +57,16 @@ flowchart TB
     TEST --> CI
     LEAK --> CI
     LINT --> CI
-    ART --> RGATE
-    RGATE --> CI
+    E2E --> CI
 ~~~
 
-## What this shows
+## Materialized architecture
 
-raw longitudinal data → canonical 5-minute timeline → quality gates + causal features + future labels → patient-level validation split → baselines + learned forecasting/state estimation → Layer A patient prior + Layer B dynamic state → Layer C probabilistic forward simulation → uncertainty-aware trajectory risk → counterfactual simulation → evaluation + dashboard + research artifacts
+The architecture is executable through DigitalTwinPipeline rather than being documentation-only:
+
+ingestion → canonicalization → 5-minute timeline → causal features + future labels → patient-level LOSO → GRU state estimator → Layer A prior + Layer B state → Layer C probabilistic simulator → risk/counterfactuals → artifacts
+
+Clinical datasets remain external. The repository includes a deterministic synthetic fixture so the full dataflow can be exercised in CI without fabricating clinical evidence.
 
 ### Validation boundary
 
@@ -76,25 +76,30 @@ Algorithmic validation targets insulin-treated diabetes in longitudinal open coh
 
 | Stage | Implementation |
 |---|---|
-| Canonical schema | schema.py |
-| Resampling / gap policy / features | preprocessing.py |
-| Hypoglycemia labels | labels.py |
-| Patient-level splits | splits.py |
-| Baselines | baselines.py |
-| Forecast/state models | models.py |
-| Training | training.py |
-| Twin/simulator | twin.py, simulator.py |
-| Evaluation | evaluation.py |
+| Source adapters | src/digital_twin/ingestion/ |
+| Canonical schema | src/digital_twin/schema.py |
+| Resampling / gap policy / features | src/digital_twin/preprocessing.py |
+| Hypoglycemia labels | src/digital_twin/labels.py |
+| Patient-level splits | src/digital_twin/splits.py |
+| Baselines | src/digital_twin/baselines.py |
+| Forecast model | src/digital_twin/models.py |
+| Layer A | src/digital_twin/twin_layers/layer_a.py |
+| Layer B | src/digital_twin/twin_layers/layer_b.py |
+| Layer C | src/digital_twin/twin_layers/layer_c.py |
+| Runtime twin | src/digital_twin/twin.py |
+| End-to-end orchestration | src/digital_twin/pipeline.py |
+| Research artifacts | src/digital_twin/artifacts.py |
+| Evaluation | src/digital_twin/evaluation.py |
+| CLI / demo | src/digital_twin/cli.py |
 | Architecture specification | docs/ARCHITECTURE.md |
 | Migration record | docs/ARCHITECTURAL_MIGRATION.md |
-| Validation protocol | docs/VALIDATION.md |
-| Safety boundary | docs/SAFETY.md |
 
 ## Run locally
 
 ~~~bash
 python -m pip install -e ".[dev,research]"
 pytest -q
+python -m digital_twin.cli --demo --output artifacts/demo
 ~~~
 
 Full cohort reproduction requires locally available datasets under their applicable terms.
